@@ -20,17 +20,21 @@ import (
 	"path/filepath"
 
 	"github.com/coreos/prometheus-operator/contrib/grafana-watcher/grafana"
+	"bytes"
+	"encoding/json"
 )
 
 type GrafanaDatasourceUpdater struct {
 	client grafana.DatasourcesInterface
 	globs  []string
+	ignoreMissing bool
 }
 
-func NewGrafanaDatasourceUpdater(c grafana.DatasourcesInterface, g []string) Updater {
+func NewGrafanaDatasourceUpdater(c grafana.DatasourcesInterface, g []string, i bool) Updater {
 	return &GrafanaDatasourceUpdater{
 		client: c,
 		globs:  g,
+		ignoreMissing: i,
 	}
 }
 
@@ -43,7 +47,15 @@ func (u *GrafanaDatasourceUpdater) OnModify() error {
 }
 
 func (u *GrafanaDatasourceUpdater) updateDatasources() error {
-	err := u.deleteAllDatasources()
+	datasources := make([]string, 0)
+	if u.ignoreMissing {
+		err := u.loadDatasourcesFromFiles(&datasources)
+		if err != nil {
+			return err
+		}
+	}
+
+	err := u.deleteAllDatasources(datasources)
 	if err != nil {
 		return err
 	}
@@ -55,16 +67,20 @@ func (u *GrafanaDatasourceUpdater) updateDatasources() error {
 	return nil
 }
 
-func (u *GrafanaDatasourceUpdater) deleteAllDatasources() error {
+func (u *GrafanaDatasourceUpdater) deleteAllDatasources(datasources []string) error {
 	log.Println("Retrieving existing datasources")
-	datasources, err := u.client.All()
+	searchResults, err := u.client.All()
 	if err != nil {
 		return err
 	}
 
-	log.Printf("Deleting %d datasources\n", len(datasources))
-	for _, d := range datasources {
-		log.Println("Deleting datasource:", d.Name)
+	log.Printf("Deleting %d datasources\n", len(searchResults))
+	for _, d := range searchResults {
+		if u.ignoreMissing && contains(datasources, d.Name) {
+			log.Println("Ignoring datasource:", d.Name)
+		} else {
+			log.Println("Deleting datasource:", d.Name)
+		}
 
 		err := u.client.Delete(d.Id)
 		if err != nil {
@@ -87,6 +103,36 @@ func (u *GrafanaDatasourceUpdater) createDatasourcesFromFiles() error {
 			if err != nil {
 				return err
 			}
+		}
+	}
+
+	return nil
+}
+
+func (u *GrafanaDatasourceUpdater) loadDatasourcesFromFiles(datasources *[]string) error {
+	for _, glob := range u.globs {
+		filePaths, err := filepath.Glob(filepath.Join(glob, "*-datasource.json"))
+		if err != nil {
+			return err
+		}
+
+		for _, fp := range filePaths {
+			f, err := os.Open(fp)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+
+			buf := new(bytes.Buffer)
+			buf.ReadFrom(f)
+
+			datasource := new(grafana.GrafanaDatasource)
+			err = json.Unmarshal(buf.Bytes(), &datasource)
+
+			if err != nil {
+				return err
+			}
+			*datasources = append(*datasources, datasource.Name)
 		}
 	}
 

@@ -66,6 +66,7 @@ func (w *watchDirSet) Type() string {
 type options struct {
 	grafanaUrl string
 	watchDirs  watchDirSet
+	ignoreMissing	bool
 	help       bool
 }
 
@@ -164,6 +165,7 @@ func main() {
 
 	flags.Var(&options.watchDirs, "watch-dir", "Directories to watch for updates.")
 	flags.StringVar(&options.grafanaUrl, "grafana-url", "", "The url to issue requests to update dashboards to.")
+	flags.BoolVar(&options.ignoreMissing, "ignore-missing", false, "Whether to ignore dashboards missing in config.")
 
 	flags.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
@@ -188,6 +190,11 @@ func main() {
 	grafanaUrl := options.grafanaUrl
 	if grafanaUrl == "" {
 		log.Fatal("Missing grafana-url")
+	}
+
+	ignoreMissing := options.ignoreMissing
+	if ignoreMissing {
+		fmt.Print("Dashboards/Datasources missing in config will be ignored\n")
 	}
 
 	gUrl, err := url.Parse(grafanaUrl)
@@ -219,14 +226,14 @@ func main() {
 		dirs = append(dirs, dir)
 	}
 
-	su := updater.NewGrafanaDatasourceUpdater(g.Datasources(), dirs)
+	su := updater.NewGrafanaDatasourceUpdater(g.Datasources(), dirs, ignoreMissing)
 	log.Println("Initializing datasources.")
 	err = su.Init()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	du := updater.NewGrafanaDashboardUpdater(g.Dashboards(), dirs)
+	du := updater.NewGrafanaDashboardUpdater(g.Dashboards(), dirs, ignoreMissing)
 	log.Println("Initializing dashboards.")
 	err = du.Init()
 	if err != nil {
